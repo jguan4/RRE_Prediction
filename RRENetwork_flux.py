@@ -110,21 +110,24 @@ class RRENetwork_flux(RRENetwork):
 		loss = lossf+lossdiff
 		return loss
 
-	def loss_boundary_data(self, bound, log = False):
+	def loss_boundary_data(self, bound, toggle, log = False):
 		psi_pred, K_pred, theta_pred, f_pred, flux_pred, [psiz_pred, psit_pred, thetat_pred, Kz_pred, psizz_pred, flux_residual] = self.rre_model(bound['z'], bound['t'], bound['flux'])
-		_,_,psiweight,fluxweight = self.weight_scheduling()
-
+		_,_,bbweight,tbweight = self.weight_scheduling()
+		weight = bbweight if toggle == 'bottom' else tbweight
 		if bound['type'] == 'flux':
-			loss = self.loss_f(flux_residual)*fluxweight
-			if log:
-				self.loss_log[7].append(fluxweight.numpy())
+			loss = self.loss_f(flux_residual)
 		elif bound['type'] == 'psiz':
 			loss = self.loss_reduce_mean(psiz_pred, bound['data'])
 		elif bound['type'] == 'psi':
-			loss = tf.reduce_mean((psi_pred - bound['data'])**2)/(self.psi_ub-self.psi_lb)**2*psiweight
-			if log:
-				self.loss_log[8].append(psiweight.numpy())
-		return loss
+			loss = self.loss_reduce_mean(psi_pred, bound['data'])/(self.psi_ub-self.psi_lb)**2
+		if log:
+			if toggle == 'top':
+				self.loss_log[7].append(weight.numpy())
+				self.loss_log[3].append(loss.numpy())
+			elif toggle == 'bottom':
+				self.loss_log[8].append(weight.numpy())
+				self.loss_log[4].append(loss.numpy())
+		return loss*weight
 
 	def predict(self, z_tf, t_tf, flux_tf):
 		z_tf = self.convert_tensor(z_tf)

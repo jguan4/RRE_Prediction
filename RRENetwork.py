@@ -40,10 +40,10 @@ class RRENetwork(object):
 		self.K = KNetwork(Kstruct, self.pathname)
 		self.Theta = ThetaNetwork(thetastruct, self.pathname)
 		self.weights = self.training_hp['weights']
-		self.psiweight_original = self.convert_tensor(self.weights[0])
+		self.bbweight_original = self.convert_tensor(self.weights[0])
 		self.fweight_original = self.convert_tensor(self.weights[1])
 		self.thetaweight = self.convert_tensor(self.weights[2])
-		self.fluxweight_original = self.convert_tensor(self.weights[3])
+		self.tbweight_original = self.convert_tensor(self.weights[3])
 		self.loss_log = [['Epoch'],['l_theta'],['l_f'],['l_top'],['l_bottom'],['weight_theta'],['weight_f'],['weight_tb'],['weight_bb']] # theta, residual, top bound, lower bound
 		self.log_time = time.time()
 		self.wrap_variable_sizes()
@@ -104,17 +104,17 @@ class RRENetwork(object):
 
 	def weight_scheduling(self, loss_theta = None):
 		if self.scheduleing_toggle == 'constant':
-			return self.thetaweight, self.fweight_original, self.psiweight_original, self.fluxweight_original
+			return self.thetaweight, self.fweight_original, self.bbweight_original, self.tbweight_original
 		elif self.scheduleing_toggle == 'linear':
 			if self.epoch % 100 == 0 or self.epoch==self.starting_epoch:
 				self.fweight = self.linear_shedule(start_weight=self.fweight_original, end_weight = self.convert_tensor(1.0), passed_epoch=self.epoch, duration = 5000) 
-				self.psiweight = self.psiweight_original
-				self.fluxweight = self.fluxweight_original
-			return self.thetaweight,self.fweight,self.psiweight, self.fluxweight
+				self.bbweight = self.bbweight_original
+				self.tbweight = self.tbweight_original
+			return self.thetaweight,self.fweight,self.bbweight, self.tbweight
 		elif self.scheduleing_toggle == 'exp':
 			if self.epoch %100 == 0 or self.epoch==self.starting_epoch:
 				self.fweight = self.exp_schedule(start_weight=self.fweight_original, end_weight = self.convert_tensor(1.0), passed_epoch=self.epoch, duration = 5000)
-			return self.thetaweight,self.fweight*10,self.psiweight, self.fluxweight
+			return self.thetaweight,self.fweight*10,self.bbweight, self.tbweight
 
 	def exp_schedule(self,start_weight,end_weight,passed_epoch,duration):
 		y = start_weight*np.exp(np.log(end_weight/start_weight)/duration*passed_epoch) if passed_epoch<= duration else end_weight
@@ -152,27 +152,28 @@ class RRENetwork(object):
 	def loss_boundary(self, boundary_data, log = False):
 		top_bound = boundary_data['top']
 		bottom_bound = boundary_data['bottom']
-		top_loss = self.loss_boundary_data(top_bound, log = log)
-		bottom_loss = self.loss_boundary_data(bottom_bound, log = log)
-		if log:
-			self.loss_log[3].append(top_loss.numpy())
-			self.loss_log[4].append(bottom_loss.numpy())
+		top_loss = self.loss_boundary_data(top_bound, 'top', log = log)
+		bottom_loss = self.loss_boundary_data(bottom_bound, 'bottom', log = log)
 		return top_loss+bottom_loss
 
-	def loss_boundary_data(self, bound, log = False):
+	def loss_boundary_data(self, bound, toggle, log = False):
 		psi_pred, K_pred, theta_pred, f_pred, flux_pred, [psiz_pred, psit_pred, thetat_pred, Kz_pred, psizz_pred] = self.rre_model(bound['z'], bound['t'])
-		_,_,psiweight,fluxweight = self.weight_scheduling()
+		_,_,bbweight,tbweight = self.weight_scheduling()
+		weight = bbweight if toggle == 'bottom' else tbweight
 		if bound['type'] == 'flux':
-			loss = self.loss_reduce_mean(flux_pred, bound['data'])*fluxweight
-			if log:
-				self.loss_log[7].append(fluxweight.numpy())
+			loss = self.loss_reduce_mean(flux_pred, bound['data'])
 		elif bound['type'] == 'psiz':
 			loss = self.loss_reduce_mean(psiz_pred, bound['data'])
 		elif bound['type'] == 'psi':
-			loss = self.loss_reduce_mean(psi_pred, bound['data'])/(self.psi_ub-self.psi_lb)**2*psiweight
-			if log:
-				self.loss_log[8].append(psiweight.numpy())
-		return loss
+			loss = self.loss_reduce_mean(psi_pred, bound['data'])/(self.psi_ub-self.psi_lb)**2
+		if log:
+			if toggle == 'top':
+				self.loss_log[7].append(weight.numpy())
+				self.loss_log[3].append(loss.numpy())
+			elif toggle == 'bottom':
+				self.loss_log[8].append(weight.numpy())
+				self.loss_log[4].append(loss.numpy())
+		return loss*weight
 
 	@tf.function
 	def loss_reduce_mean(self, pred, data):
@@ -221,7 +222,7 @@ class RRENetwork(object):
 		for epoch in range(self.tf_epochs):
 			if epoch %50 == 0 or epoch == self.tf_epochs:
 				self.save_model()
-				self.save_model(tag = self.epoch)
+				# self.save_model(tag = self.epoch)
 				self.save_loss()
 			self.loss_log[0].append(self.epoch)
 			loss_value = self.tf_optimization_step(theta_data, residual_data, boundary_data)
@@ -246,7 +247,7 @@ class RRENetwork(object):
 		self.loss_and_flat_grad(Xi, log = True)
 		if self.Nfeval %50 == 0:
 			self.save_model()
-			self.save_model(tag = self.epoch)
+			# self.save_model(tag = self.epoch)
 			self.save_loss()
 		self.Nfeval += 1
 		self.epoch += 1
